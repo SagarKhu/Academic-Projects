@@ -1,0 +1,135 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+```{r eval=FALSE, include=FALSE}
+
+```
+
+# Install the necessary packages and run the libraries
+
+```{r}
+library(animation)
+library(car)
+library(corrplot)
+library(datasets)
+library(gapminder)
+library(gcookbook)
+library(geomnet)
+library(GGally)
+library(ggmap)
+library(htmlwidgets)
+library(leaflet)
+library(manipulateWidget)
+library(maps)
+library(PerformanceAnalytics)
+library(plotly)
+library(radarchart)
+library(RColorBrewer)
+library(rmarkdown)
+library(shiny)
+library(shinydashboard)
+library(tidyverse)
+library(treemap)
+library(WDI)
+library(grid)
+library(devtools)
+library(gridExtra)
+library(scales)
+```
+
+# Import the data from World Indicators data set and perform necesaary wrangling on the variables; change data types, format, and clean the dataset
+
+```{r}
+# Read the world indicators data
+worldIndicators <- read_csv(file.choose())
+view(worldIndicators)
+str(worldIndicators)
+
+# Data Wrangling and Cleaning
+worldIndicators2 <- select(worldIndicators, c("BirthRate", "LifeExpectancy", "InfantMortalityRate", "Region", "Year"))
+worldIndicators2 <- filter(worldIndicators2, Year > "12/1/2003" & Year < "12/1/2011")
+glimpse(worldIndicators2)
+
+
+#  Need to strip out '%' from 2 of the columns
+worldIndicators2$birth <- str_sub(worldIndicators2$`BirthRate`, 1, str_length(worldIndicators2$`BirthRate`)-1)
+worldIndicators2$birth <- as.numeric(worldIndicators2$birth)
+worldIndicators2$im <- str_sub(worldIndicators2$`InfantMortalityRate`, 1, str_length(worldIndicators2$`InfantMortalityRate`)-1)
+worldIndicators2$im <- as.numeric(worldIndicators2$im)
+worldIndicators2$life <- as.numeric(worldIndicators2$`LifeExpectancy`)
+
+
+#  Convert Year to numeric year
+worldIndicators2$Yr <- as.Date.character(worldIndicators2$Year, "%m/%d/%Y")
+worldIndicators2$Region <- as.factor(worldIndicators2$Region)
+view(worldIndicators2)
+
+#  Now summarize average rates by region
+worldIndicators3 <- worldIndicators2 %>%
+  group_by(Region, Yr) %>%
+  summarize(birthrate = mean(birth, na.rm = T),
+            life_exp = mean(life, na.rm = T), 
+            infant = mean(im, na.rm = T))
+
+
+worldIndicators3$Yr1 <- as.numeric(format(as.Date(worldIndicators3$Yr, format("%m%d%Y%")), "%Y"))
+worldIndicators3
+str(worldIndicators3)
+```
+
+# Now plot the 3 major measures(Birth Rate, Infant Mortality Rate, Life Expectancy) across 6 regions of the world
+
+```{r}
+# Birth Rate
+p1 <- ggplot(worldIndicators3, aes(x = Yr1, y = birthrate, color = Region)) + 
+  geom_line(size = 1.5) + 
+  facet_grid(~ Region) +
+  theme(axis.title.x = element_blank(),
+        axis.text.x = element_blank(),
+        axis.ticks.x = element_blank(),
+        legend.position = "none") +
+  scale_y_continuous(limits = c(0, 4), 
+                     breaks = c(0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 3.5)) +
+  labs(y = "Avg. Birth Rate(%)")
+  
+
+# Infant Mortality Rate
+p2 <- ggplot(worldIndicators3, aes(x = Yr1, y = infant, color = Region)) + 
+  geom_line(size = 1.5) + 
+  facet_grid(~ Region) +
+  theme(axis.title.x = element_blank(), 
+        axis.text.x = element_blank(), 
+        axis.ticks.x = element_blank(), 
+        strip.text.x = element_blank(),
+        legend.position = "none") +
+  scale_y_continuous(limits = c(0,7.5), 
+                     breaks = c(1,2,3,4,5,6,7)) +
+  labs(y = "Avg. Infant Mortality Rate")
+
+  
+
+# Life Expectancy Rate
+p3 <- ggplot(worldIndicators3, 
+             aes(x = Yr1, y = life_exp, fill = Region)) + 
+  geom_bar(stat = "identity")+
+  facet_grid(.~Region) +
+  theme(strip.text.x = element_blank(), 
+        legend.position = "none", 
+        axis.text.x=element_text(angle=90,hjust=1),
+        axis.title.x = element_blank()) +
+  scale_x_continuous(breaks = worldIndicators3$Yr1) +
+  labs(y = "Avg. Life Expectancy (years)")
+```
+
+# Plot the abovd 3 measures on a single graph as a grid
+
+```{r}
+grid.arrange(p1, p2, p3, top = "Avg. Birth Rate, Avg. Infant Mortality Rate & Avg. Life Expectancy
+             Region")
+```
+

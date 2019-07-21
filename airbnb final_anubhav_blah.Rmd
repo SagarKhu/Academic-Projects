@@ -1,0 +1,754 @@
+---
+title: "Airbnb_final"
+author: "Sagar Khurana"
+date: "May 03rd, 2018"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+#Executive Summary
+Airbnb is an American company which operates an online marketplace and hospitality service for people to lease or rent short-term lodging including holiday cottages, apartments, homestays, hostel beds, or hotel rooms. As a host, you will be able to manage your properties, set the price and connect to renters. However, setting your own price is tricky, as it is difficult to set the most efficient price. A too low price will not maximize your profit and make it even less profitable than traditional rental, while a too high will push the customers away. Our project attempts to suggest a price to current and new host based on their properties' information in comparison with other hosts with similar listing's features.
+
+Key finding: The pricing strategy is determined by various factors such as room type, number of bathroom and bedroom or its review score for cleanliness. They are the core factors that a host should be considered when choosing pricing strategies. At the same time, it also implies that better listing maintenance will result in higher price.
+
+
+#Introduction
+
+For this project, we strive to build a prediction model to help Airbnb suggest current and new hosts with the optimal price to compete with other hosts with similar listing's features in the area. We believe the right pricing strategies will bring more visitors and bookings for more hosts.    
+
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=TRUE}
+library(tm)
+library(RColorBrewer)
+library(tidyr)
+library(tidyverse)
+library(tidytext)
+library(wordcloud)
+library(wordcloud2)
+library(lattice)
+library(reshape2)
+#library(rJava)
+library(ggplot2)
+library(devtools)
+library(caret)
+library(corrr)
+library(readr)
+library(corrplot)
+```
+
+Data sources and investigated variables.
+
+For the model, we would use data from 3 datasets: Listing, Boston_property and Reviews. Listing dataset provides data of the users' property information such as neighborhood, amenities, property type and current price they are setting for their listing. Reviews dataset provide the information of the reviews that the hosts have for their properties and Boston-property has the data for properties in Boston area such as area, value or type of property (commercial or residential). 
+
+From the Reviews dataset, we take the all the comments and give each comment a polarity score. Then we sum up all the polarity score that one listing have and have the output as the review score for that listing. The variable is called polarity and is later on merged to the Listing dataset. We seek to find out if more positive reviews can help the hosts to charge a higher price.
+
+From the Boston_property dataset, we first subset all the the residential property type. Then we group by zipcode. We also create a new variable which is value_per_sqft, which is equal to AV_TOTAL/GROSS_AREA. We then find the median price with each zipcode. Finally we merge this dataset with the Listing dataset. We want to use this information to see if value_per_sqft would have an impact on the price. For example, we want see if there is any price premimum resulting from the area the listing is located at. 
+ 
+
+
+#Load the data
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+# Read the reviews data set
+listings <- read.csv(file.choose(), header = T)
+```
+
+# Boxplot
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+ggplot(listings, aes(x=neighbourhood_cleansed, y=price, color = neighbourhood_cleansed)) + 
+  geom_boxplot(outlier.colour = "white") + scale_y_discrete(limits = c(0,100,200,300,400,500)) + scale_fill_grey() + theme_classic() + coord_flip()
+
+ggplot(listings, aes(x = property_type, y = price, color = property_type)) + 
+  geom_boxplot(outlier.colour = "white") + scale_y_discrete(limits = c(0,100,200,300,400,500)) + 
+  scale_fill_grey() + theme_classic() + coord_flip()
+
+```
+ Price-Neighbourhood_Cleansed: The graph shows price ranges for different locations.The "South Boston Waterfront" has the highest variation with the median price at $250, followed by "Backbay", "Downtown" and "Charlestown" but the median price for all these locations is $200.The "Leather District" has lower variation but the higher median value at $280.
+
+ Price-Property_Type: The graph shows price ranges for various property types. The "Other" type has the highest variation with the median price at $270, followed by "Townhouse" and "Condominium" with the median price at $150 whereas the "Boat" and "Loft" have lower variation but the higher median value at $260.
+
+#Data handling
+
+
+First, we convert all blanks to NA anh check for missing data. We then eliminate the varibles with more than 50% NAs. 
+
+Next, we check NAs for each row and we found that there is no row with more than 10% missing data, so we cannot eliminate any observations.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#converting blanks to NA
+Variables <- variable.names(listings) # converting all variable names to  
+listings <- data.frame(ifelse(listings %in% c(""," ","NA"), NA, listings))#Treating blanks and reconverting list to Data Frame 
+colnames(listings) <- Variables  # renaming the strings
+
+#Checking Missing data
+listings_missing <- data.frame(colSums(is.na(listings)))
+colnames(listings_missing)[1]<- "Nulls"
+listings_missing$Nulls_percent <- round(((listings_missing$Nulls/4870)*100),2)
+listings_missing$var <- Variables
+listings_missing_maxNA <- listings_missing %>% filter(Nulls_percent>50)
+listings_missing_maxNA #eliminate these vaiables
+listings <- listings[ , -which(names(listings) %in% c("neighbourhood_group_cleansed","square_feet", "license", "jurisdiction_names"))] #eliminating variables with more than 50% NAs
+
+#data imputation for other missing values
+
+listings_missing_other <-listings_missing %>% filter(Nulls_percent>0 & Nulls_percent <50)
+
+listings$NA_percent <- round((rowSums((is.na(listings)/92)*100))) #checking NA
+#we learn that at the most there is just 10% missing data in each row; hence, we can't eliminate any observations
+
+```
+
+
+After meticulously investigating the dataset, we decided to drop variables with these following principles. 
+- Eliminating all text variables: we can not use these variable for our regression model
+- Eliminating variables with IDs: not relevant for pricing strategies
+- Eliminate the varibles with more than 50% NAs 
+- Eliminating redundant variables as we can find alternative variables with higher quality: Zipcode, Longitude and Latitude all contain information about location while we have a better alternative, neighborhood_clean, which is less catergorical.
+
+Using thes principles, we were able to lower the number of variables from 96 to 50.
+
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+  
+listings_clean <- listings[,-c(2, 3, 4, 5, 6, 7,8, 9, 10,11,12,13,14,15, 16, 17,18,19, 21, 22, 24, 25, 28, 30, 31, 32, 35, 38, 39, 41, 42, 43, 45, 46, 47, 48, 49, 60, 61, 68, 69, 74, 76, 77, 85)]
+
+#Coverting currency and percentages to numeric values 
+listings_clean$price <- as.numeric(gsub('[$,]', '', listings_clean$price))
+listings_clean$security_deposit <- as.numeric(gsub('[$,]', '', listings_clean$security_deposit))
+listings_clean$cleaning_fee <- as.numeric(gsub('[$,]', '', listings_clean$cleaning_fee))
+listings_clean$extra_people <- as.numeric(gsub('[$,]', '', listings_clean$extra_people))
+listings_clean$host_response_rate <- as.numeric(gsub('[%]', '', listings_clean$host_response_rate))
+
+#Converting two variable categorical data to Dummy variables- True = 1, False = 0
+listings_clean$host_is_superhost <- ifelse(listings_clean$host_is_superhost == 't',1,0)
+listings_clean$host_has_profile_pic <- ifelse(listings_clean$host_has_profile_pic == 't',1,0)
+listings_clean$host_identity_verified <- ifelse(listings_clean$host_identity_verified == 't',1,0)
+listings_clean$is_location_exact <- ifelse(listings_clean$is_location_exact == 't',1,0)
+listings_clean$instant_bookable <- ifelse(listings_clean$instant_bookable == 't',1,0)
+listings_clean$is_business_travel_ready <- ifelse(listings_clean$is_business_travel_ready == 't',1,0)
+listings_clean$require_guest_profile_picture <- ifelse(listings_clean$require_guest_profile_picture == 't',1,0)
+listings_clean$require_guest_phone_verification <- ifelse(listings_clean$require_guest_phone_verification == 't',1,0)
+
+#converting date to years since host 
+listings_clean$host_since<- as.numeric(gsub('[/]', '', listings_clean$host_since))
+listings_clean$host_since <- 17- (as.numeric(str_sub(listings_clean$host_since, start= -2))) #since last scrapped date's year is 2017, we now convert the host_since variable to "years since".
+
+#Converting categorical variableswith more than 2 categories
+
+listings_clean <- transform(listings_clean, host_response_time = as.numeric(as.character(
+       factor(host_response_time, 
+         levels = c("within an hour" , "within a few hours", "within a day", "a few days or more", "N/A"),
+         labels = c(1,2,3,4,NA)))))
+
+listings_clean <- transform(listings_clean, market = as.numeric(as.character(
+       factor(market, 
+         levels = c( "", "Boston", "Other (International)"),
+         labels = c(NA,1,2)))))
+
+listings_clean <- transform(listings_clean, room_type = as.numeric(as.character(
+       factor(room_type, 
+         levels = c( "Shared room", "Private room", "Entire home/apt" ),
+         labels = c(1,2,3)))))
+
+listings_clean <- transform(listings_clean, bed_type = as.numeric(as.character(
+       factor(bed_type, 
+         levels = c( "Futon", "Couch", "Airbed", "Pull-out Sofa","Real Bed"  ),
+         labels = c(1,2,3,4,5)))))
+
+
+listings_clean <- transform(listings_clean, cancellation_policy = as.numeric(as.character(
+       factor(cancellation_policy, 
+         levels = c( "flexible","moderate","strict","super_strict_30","super_strict_60"),
+         labels = c(1,2,3,4,5)))))
+
+listings_clean$neighbourhood_cleansed_num <-
+  as.numeric(as.character(factor(listings_clean$neighbourhood_cleansed,levels = c( "Allston","Back Bay", "Bay Village", "Beacon Hill", "Brighton","Charlestown","Chinatown","Dorchester", "Downtown", "East Boston", "Fenway","Hyde Park","Jamaica Plain", "Leather District", "Longwood Medical Area", "Mattapan", "Mission Hill","North End","Roslindale","Roxbury", "South Boston", "South Boston Waterfront","South End","West End","West Roxbury"),labels = c(1,2,3,4,5,6,7,8,9,10, 11,12,13,14,15,16,17,18,19,20,21,22,23,24,25))))
+
+listings_clean$property_type_num <- as.numeric(as.character(factor(listings_clean$property_type ,levels = c( "Apartment", "Bed & Breakfast", "Boat", "Boutique hotel", "Condominium", "Dorm", "Guest suite", "Guesthouse", "Hostel", "House", "In-law", "Loft", "Other","Serviced apartment", "Timeshare","Townhouse", "Villa"  ),labels = c(1,2,3,4,5,6,7,8,9,10, 11,12,13,14,15,16,17))))
+
+
+#correlation analysis
+
+listings_clean_corr <- listings_clean[,-c(11,14,21,48)]
+listings_corr <-round(cor(listings_clean_corr, use = "p"),2)
+corr_names <- names(listings_clean[,-c(11,14,21,48)])
+
+Corr_at5 <- as.data.frame(which(abs(listings_corr) > 0.5 | listings_corr < -0.5, arr.ind=TRUE))
+Corr_at5$rminusc <- (Corr_at5$row-Corr_at5$col)
+Corr_at5 <- subset(Corr_at5, !(rminusc == 0) )
+Corr_at5 <- subset(Corr_at5, (rminusc >= 1) )
+Corr_at5$rminusc <- NULL
+
+```
+
+#Correlation analysis
+After running the correlation matrix with the 50 variables, we highlighted all the variables with correlation score larger than 0.5 or less than -0.5. 
+
+For example, variables such as availability_30, availability_60, availability_90, availablibity_360 are highly correlated so we only keep availability_360 as it contains all the information of the other 3. 
+
+We made further analyses to keep some variables that we think of good use for our model. 
+
+Eventually, we narrowed down the number of variables to 39
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# host_listing_count(see if it affects the price and we dropped other 2 correlated variables), Bedrooms-Beds(corelated but still retaining)
+
+#Drop variables:
+
+listings_final <- listings_clean[ , -which(names(listings_clean) %in% c("host_id", "calculated_host_listings_count", "host_total_listings_count", "accommodates","guests_included","availability_30","availability_60", "availability_90", "review_scores_rating","require_guest_profile_picture", "require_guest_phone_verification"))]
+
+#Handling Missing Values
+
+listings_final$review_scores_accuracy[which(is.na(listings_final$review_scores_accuracy))] <- mean(listings_final$review_scores_accuracy, na.rm=TRUE)
+
+
+listings_final$review_scores_cleanliness[which(is.na(listings_final$review_scores_cleanliness))] <- mean(listings_final$review_scores_cleanliness, na.rm=TRUE)
+
+
+listings_final$review_scores_checkin[which(is.na(listings_final$review_scores_checkin))] <- mean(listings_final$review_scores_checkin, na.rm=TRUE)
+
+listings_final$review_scores_communication[which(is.na(listings_final$review_scores_communication))] <- mean(listings_final$review_scores_communication, na.rm=TRUE)
+
+listings_final$review_scores_location[which(is.na(listings_final$review_scores_location))] <- mean(listings_final$review_scores_location, na.rm=TRUE)
+
+listings_final$review_scores_value[which(is.na(listings_final$review_scores_value))] <- mean(listings_final$review_scores_value, na.rm=TRUE)
+
+listings_final$reviews_per_month[which(is.na(listings_final$reviews_per_month))] <- mean(listings_final$reviews_per_month, na.rm=TRUE)
+
+listings_final$host_response_rate[which(is.na(listings_final$host_response_rate))] <- mean(listings_final$host_response_rate, na.rm=TRUE)
+
+listings_final$market[which(is.na(listings_final$market))] <- mean(listings_final$market, na.rm=TRUE)
+
+listings_final$bathrooms[which(is.na(listings_final$bathrooms))] <- mean(listings_final$bathrooms, na.rm=TRUE)
+
+listings_final$beds[which(is.na(listings_final$beds))] <- mean(listings_final$beds, na.rm=TRUE)
+
+listings_final$bedrooms[which(is.na(listings_final$bedrooms))] <- mean(listings_final$bedrooms, na.rm=TRUE)
+
+listings_final$cleaning_fee[which(is.na(listings_final$cleaning_fee))] <- mean(listings_final$cleaning_fee, na.rm=TRUE)
+ 
+listings_final$host_response_time[which(is.na(listings_final$host_response_time))] <- mean(listings_final$host_response_time, na.rm=TRUE)
+
+listings_final$security_deposit[which(is.na(listings_final$security_deposit))] <- mean(listings_final$security_deposit, na.rm=TRUE)
+
+```
+
+#merging reviews polarity to listings_final dataset  
+
+We then merged polarity variable from the reviews dataset to the listings_final dataset (Refered to the data source summary above)
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+polarity <- read.csv(file.choose(), header = T)
+listings_final<-merge(listings_final,polarity, by = "id", all.x = TRUE)
+listings_final$polarity <- ifelse(is.na(listings_final$polarity),0, listings_final$polarity)
+
+```
+
+#merging reviews price per sq. ft. to listings_final dataset  
+
+We merged the price_per_sqft to our dataset (Refered to the data source summary above)
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+price_per_sqft <- read.csv(file.choose(), header = T)
+listings_final<-merge(listings_final,price_per_sqft, by = "id", all.x = TRUE)
+
+listings_final$price_per_sqft[which(is.na(listings_final$price_per_sqft))] <- mean(listings_final$price_per_sqft, na.rm=TRUE)
+
+```
+
+
+
+#Running a simple logistic regressions on listings_final 
+After having the dataset ready, we tried running linear regression in order to figure out the statistically significant variables.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#removing id, amenities and NA_percent
+listings_final <- listings_final[ , -which(names(listings_final) %in% c("id", "amenities", "NA_percent", "neighbourhood_cleansed_num", "property_type_num"))]
+
+
+
+#running the logistic regression 
+
+
+reg_1 <- lm(price~   host_response_time + host_response_rate +
+              host_is_superhost+host_listings_count+ host_has_profile_pic + 
+              host_identity_verified + factor(neighbourhood_cleansed) + market+ is_location_exact +
+              factor(property_type)+room_type+ bathrooms+ bedrooms + beds + bed_type+ security_deposit+
+              cleaning_fee+ extra_people + minimum_nights + maximum_nights+ availability_365
+            +number_of_reviews +review_scores_accuracy + review_scores_cleanliness + review_scores_checkin+
+              review_scores_communication + review_scores_location + review_scores_value+
+              instant_bookable+ is_business_travel_ready + cancellation_policy+ reviews_per_month+
+              polarity+ price_per_sqft, data= listings_final)
+
+summary(reg_1)
+
+```
+
+Based on the regression summary, we eliminate the following variables as they are insignificant:
+host_response_time, host_is_superhost, host_has_profile_pic, market, is_location_exact,beds,bed_type, security_deposit, extra_people, minimum_nights, maximum_nights , number_of_reviews, review_scores_accuracy,review_scores_checkin, review_scores_communication, review_scores_value, is_business_travel_ready, reviews_per_month, price_per_sqft,and polarity
+
+We ran three more models using similar concept. The code is in Appendix.
+#put in the appendix
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+reg_2 <- lm(price~ host_response_rate + host_listings_count+ host_identity_verified + factor(neighbourhood_cleansed) + 
+              factor(property_type)+room_type+ bathrooms+ bedrooms +
+              cleaning_fee+ availability_365
+            +review_scores_cleanliness + instant_bookable + cancellation_policy, data= listings_final)
+
+summary(reg_2)
+
+#Eliminating bad insignificant factors
+
+
+reg_3 <- lm(price~ host_response_rate + host_listings_count+ host_identity_verified + factor(neighbourhood_cleansed, exclude= c("Brighton", "Dorchester", "East Boston", "Hyde Park", "Longwood Medical Area", "Mattapan", "Roslindale", "Roxbury", "West Roxbury")) + 
+              factor(property_type, exclude= c("Bed & Breakfast", "Condominium", "Dorm", "Guest suite","Guesthouse", "House", "In-law", "Loft","Serviced apartment", "Timeshare", "Townhouse", "Villa"))+room_type+ bathrooms+ bedrooms +
+              cleaning_fee+ availability_365
+            +review_scores_cleanliness + instant_bookable + cancellation_policy, data= listings_final)
+
+summary(reg_3)
+
+
+#Big insignificant factors- host_response_rate, review_scores_cleanliness, cancellation_policy, factor- Jamaica Plain, Leather District, Mission Hill, North End, South Boston, Charlestown, Villa, Boutique hotel, Other
+
+reg_4 <- lm(price~ host_listings_count+ host_identity_verified + factor(neighbourhood_cleansed, exclude= c("Brighton", "Dorchester", "East Boston", "Hyde Park", "Longwood Medical Area", "Mattapan", "Roslindale", "Roxbury", "West Roxbury", "Jamaica Plain", "Leather District", "Mission Hill", "North End", "South Boston", "Charlestown")) +factor(property_type, exclude= c("Bed & Breakfast", "Condominium", "Dorm", "Guest suite","Guesthouse", "House", "In-law", "Loft","Serviced apartment", "Timeshare", "Townhouse", "Villa", "Hostel"))+room_type+ bathrooms+ bedrooms +
+              cleaning_fee+ availability_365
+            + instant_bookable , data= listings_final)
+
+summary(reg_4)
+
+```
+
+#Splitting the data set into training and validation sets 
+The concept we use here is similar to the one above but we partition the dataset into training and validation. The ratio is 70:30. We ran linear regression on the training dataset.  
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+set.seed(123)
+train.index<-sample(c(1:dim(listings_final)[1]),dim(listings_final)[1]*0.70)
+train.df<-listings_final[train.index, ] 
+valid.df<-listings_final[-train.index, ]
+
+valid.df.result <- valid.df[17] #dissecting all predictions for residuals
+valid.df <-valid.df[c(-17)] #removing the dependent variable from validation set
+```
+
+As mentioned above, we now use the 9 chosen variables for the analysis to generate all possible models from the analysis.  
+
+#Regression Models
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Making linear models
+airbnbvec_1 = c(' ','+host_listings_count')
+airbnbvec_2 = c(' ','+factor(neighbourhood_cleansed, exclude= c("Brighton", "Dorchester", "East Boston", "Hyde Park", "Longwood Medical Area", "Mattapan", "Roslindale", "Roxbury", "West Roxbury", "Jamaica Plain", "Leather District", "Mission Hill", "North End", "South Boston", "Charlestown"))')
+airbnbvec_3 = c(' ','+factor(property_type, exclude= c("Bed & Breakfast", "Condominium", "Dorm", "Guest suite","Guesthouse", "House", "In-law", "Loft","Serviced apartment", "Timeshare", "Townhouse", "Villa", "Boutique hotel", "Other", "Hostel"))')
+airbnbvec_4 = c(' ','+room_type')
+airbnbvec_5 = c(' ','+bathrooms')
+airbnbvec_6 = c(' ','+bedrooms')
+airbnbvec_7 = c(' ','+cleaning_fee')
+airbnbvec_8 = c(' ','+availability_365')
+airbnbvec_9 = c(' ','+instant_bookable')
+
+formulaSet = paste('price~ 0', 
+                   apply( expand.grid(airbnbvec_1,airbnbvec_2, 
+                                      airbnbvec_3,airbnbvec_4,airbnbvec_5,
+                                      airbnbvec_6, airbnbvec_7,
+                                      airbnbvec_8, airbnbvec_9),1,paste,collapse= ""))
+
+```
+
+The vector formulaSet contains 512 regression models that can now be passed through functions to make 512 linear models on the training dataset; further, we use it for prediction on the validation dataset. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Generating 512 linear models- 
+
+lm <- lapply(1:512, 
+                 function(x){lm(as.formula(formulaSet[x]),
+                                data=train.df)})
+
+#Predicting 512 linear models- 
+
+pred <- as.data.frame(lapply(1:512, function(x)
+  {predict(lm[[x]], valid.df)}))
+
+```
+
+
+#Identifying the best model: 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Merging all predictions to one
+pred <- round(pred)
+
+model_nam <- seq ( 1 , 512 , by= 1 ) #naming models in all_lm_pred
+colnames (pred) <- model_nam
+
+#calculating the MSE
+listings.MSE <- data.frame ( lapply ( 1 : 512 , function (x)
+{( mean ((pred[x] - valid.df.result) ^ 2 ))}))
+
+colnames (listings.MSE) <- model_nam
+
+listings.MSE <- melt (listings.MSE)
+best_model <- listings.MSE
+
+colnames (best_model)[ 2 ] <- "MSE"
+best_model $ model <- formulaSet
+best_model <- best_model %>%
+arrange (model, desc (MSE)) %>%
+filter (MSE < 14114.56)
+best_model $ MSE <- round (best_model $ MSE, 4 )
+
+lm_best <- lapply ( 1 : 5 ,
+function (x){ lm ( as.formula (best_model $ model[x]),
+data= train.df)})
+
+best_model$adj.r.squared <- round ( as.numeric ( lapply ( 1 : 5 ,( function (x)
+  {  summary (lm_best[[x]]) $ adj.r.squared}))), 4 )
+
+best_model$err_per_obs <- round(sqrt(best_model$MSE)/nrow(valid.df), 2)
+best_model
+
+```
+
+
+As you can see above, we have chosen the top 5 models on the basis of lowest MSE. The lowest MSE model was using 
+"price~ host_listings_count + room_type + bathrooms+bedrooms + cleaning_fee + instant_bookable"   
+
+
+
+#TWO
+We now repeat the process using training dataset
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+
+#running the logistic regression 
+
+reg_1_trial <- lm(price~ host_response_time + host_response_rate +
+              host_is_superhost+host_listings_count+ host_has_profile_pic + 
+              host_identity_verified + factor(neighbourhood_cleansed) + market+ is_location_exact +
+              factor(property_type)+room_type+ bathrooms+ bedrooms + beds + bed_type+ security_deposit+
+              cleaning_fee+ extra_people + minimum_nights + maximum_nights+ availability_365
+            +number_of_reviews +review_scores_accuracy + review_scores_cleanliness + review_scores_checkin+
+              review_scores_communication + review_scores_location + review_scores_value+
+              instant_bookable+ is_business_travel_ready + cancellation_policy+ reviews_per_month+
+              polarity+ price_per_sqft, data= train.df)
+
+summary(reg_1_trial)
+
+
+
+#Based on the regression summary, we keep the below montioned variables: 
+
+
+reg_2_trial <- lm(price~ host_listings_count+ host_identity_verified + factor(neighbourhood_cleansed) + 
+              factor(property_type)+room_type+ bathrooms+ bedrooms +
+              cleaning_fee+review_scores_cleanliness + 
+              instant_bookable + reviews_per_month, data= train.df)
+
+summary(reg_2_trial)
+
+#Eliminating bad insignificant factors
+
+#"Serviced apartment"
+
+
+
+reg_3_trial <- lm(price~ host_listings_count+ host_identity_verified + 
+                    factor(neighbourhood_cleansed, exclude= c("Brighton", "Dorchester", 
+                                                              "East Boston", "Hyde Park",
+                                                              "Longwood Medical Area", "Mattapan", 
+                                                              "Mission Hill","Roslindale", "Roxbury", 
+                                                              "West Roxbury")) + 
+                    factor(property_type, exclude= c("Bed & Breakfast", "Condominium", "Dorm", 
+                                                     "Guest suite","Guesthouse", "House", 
+                                                     "In-law", "Loft","Other","Timeshare", 
+                                                     "Townhouse", "Villa"))+room_type+ 
+                    bathrooms+ bedrooms +cleaning_fee+review_scores_cleanliness + 
+              instant_bookable + reviews_per_month, data= train.df)
+
+summary(reg_3_trial)
+
+
+#Big insignificant factors- cleaning_fee, factor- Jamaica Plain, Leather District, North End, South Boston, Charlestown, Villa, Boutique hotel, Other
+
+reg_4_trial <- lm(price ~ host_listings_count + host_identity_verified + 
+    factor(neighbourhood_cleansed, exclude = c("Brighton", "Dorchester", 
+        "East Boston", "Hyde Park", "Longwood Medical Area", 
+        "Mattapan", "Mission Hill", "Roslindale", "Roxbury", 
+        "West Roxbury", "Charlestown", "Jamaica Plain", "Leather District", 
+        "North End", "South Boston")) + factor(property_type, 
+    exclude = c("Bed & Breakfast", "Condominium", "Dorm", "Guest suite", 
+        "Guesthouse", "House", "In-law", "Loft", "Other", "Timeshare", 
+        "Townhouse", "Villa")) + room_type + bathrooms + bedrooms + 
+    review_scores_cleanliness + instant_bookable + reviews_per_month,
+data= train.df)
+
+summary(reg_4_trial)
+
+
+```
+
+
+#Regression Models
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Making linear models
+airbnbvec_1_two = c(' ','+host_listings_count')
+airbnbvec_2_two = c(' ','+factor(neighbourhood_cleansed, exclude= c("Brighton", "Dorchester", 
+                                                              "East Boston", "Hyde Park",
+                                                              "Longwood Medical Area", "Mattapan", 
+                                                              "Mission Hill","Roslindale", "Roxbury", 
+                                                              "West Roxbury", "Charlestown","Jamaica Plain", 
+                                                              "Leather District","North End","South Boston",
+                                                              "West End"))')
+airbnbvec_3_two = c(' ','+factor(property_type, exclude= c("Bed & Breakfast", "Condominium", "Dorm", 
+                                                     "Guest suite","Guesthouse", "House", 
+                                                     "In-law", "Loft","Other","Timeshare", 
+                                                     "Townhouse", "Villa", "Serviced apartment", 
+                    "Boutique hotel", "Hostel"))')
+airbnbvec_4_two = c(' ','+room_type')
+airbnbvec_5_two = c(' ','+bathrooms')
+airbnbvec_6_two = c(' ','+bedrooms')
+airbnbvec_7_two = c(' ','+host_identity_verified')
+airbnbvec_8_two = c(' ','+review_scores_cleanliness')
+airbnbvec_9_two = c(' ','+reviews_per_month')
+
+formulaSet_two = paste('price~ 0', 
+                   apply( expand.grid(airbnbvec_1_two,airbnbvec_2_two, 
+                                      airbnbvec_3_two,airbnbvec_4_two,airbnbvec_5_two,
+                                      airbnbvec_6_two, airbnbvec_7_two,
+                                      airbnbvec_8_two, airbnbvec_9_two),1,paste,collapse= ""))
+
+```
+
+The vector formulaSet contains 512 regression models that can now be passed through functions to make 512 linear models on the training dataset; further, we use it for prediction on the validation dataset. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Generating 512 linear models- 
+
+lm_two <- lapply(1:512, 
+                 function(x){lm(as.formula(formulaSet_two[x]),
+                                data=train.df)})
+
+#Predicting 512 linear models- 
+
+pred_two <- as.data.frame(lapply(1:512, function(x)
+  {predict(lm_two[[x]], valid.df)}))
+
+```
+
+
+#Identifying the best model: 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Merging all predictions to one
+pred_two <- round(pred_two)
+
+model_nam <- seq ( 1 , 512 , by= 1 ) #naming models in all_lm_pred
+colnames (pred_two) <- model_nam
+
+#calculating the MSE
+listings.MSE_two <- data.frame ( lapply ( 1 : 512 , function (x){(
+  mean ((pred_two[x]-valid.df.result) ^ 2 ))}))
+
+colnames (listings.MSE_two) <- model_nam
+
+listings.MSE_two <- melt (listings.MSE_two)
+best_model_two <- listings.MSE_two
+
+colnames (best_model_two)[ 2 ] <- "MSE"
+best_model_two$model <- formulaSet_two
+
+#Selecting top 5 models on the basis of MSE
+best_model_two <- best_model_two %>%
+arrange (model, desc (MSE)) %>%
+filter (MSE < 13736.55)
+best_model_two$MSE <- round (best_model_two$MSE, 4 )
+
+lm_best_two <- lapply ( 1 : 5 ,
+function (x){ lm ( as.formula (best_model_two $ model[x]),
+data= train.df)})
+
+best_model_two$adj.r.squared <- round ( as.numeric ( lapply ( 1 : 5 ,( function (x)
+  {  summary (lm_best_two[[x]]) $ adj.r.squared}))), 4 )
+
+best_model_two$err_per_obs <- round(sqrt(best_model_two$MSE)/nrow(valid.df), 2)
+
+best_model$model
+
+
+
+
+```
+[1] "price~ 0    +room_type+bathrooms+bedrooms+host_identity_verified+review_scores_cleanliness "                                    
+[2] "price~ 0    +room_type+bathrooms+bedrooms+host_identity_verified+review_scores_cleanliness+reviews_per_month"                   
+[3] "price~ 0 +host_listings_count  +room_type+bathrooms+bedrooms +review_scores_cleanliness+reviews_per_month"                      
+[4] "price~ 0 +host_listings_count  +room_type+bathrooms+bedrooms+host_identity_verified+review_scores_cleanliness "                 
+[5] "price~ 0 +host_listings_count  +room_type+bathrooms+bedrooms+host_identity_verified+review_scores_cleanliness+reviews_per_month"
+
+The 5th model is the best with lowest MSE
+
+#Next we tried PCA and FAILED  
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(dummies)
+library(rpart)
+new.train <- dummy.data.frame(train.df, names = c("neighbourhood_cleansed","property_type"))
+
+new.valid <- dummy.data.frame(valid.df, names = c("neighbourhood_cleansed","property_type"))
+
+summary(get.dummy(new.train))
+
+names(new.train)
+names(new.valid)
+#PCA for training set
+prin_comp <-prcomp(new.train[-c(1,56)],center=TRUE,scale=TRUE)
+
+summary(prin_comp)
+
+train.data <-data.frame(price=new.train$price,prin_comp$x)
+
+
+train.data <- train.data[,1:55]
+
+rpart_model <- rpart(price~ ., data = train.data,method="anova",cp=0.00001)
+
+printcp(rpart_model)
+```
+
+We try to use Principal Component Analysis in order to avoid multicollinearity. Since neighbourhood_cleansed and property_type are categorical variables, we need to creat dummies for these two variables for PCA. Converting them into d0ummies works will for training set. We run the PCA model with 74 variables, which includes all the dummies for catergorical variables, and get the principal components for training set. Based on their accumulative porportion, the first 55 principal components explain nearly 90% of the information. After that, we run regression tree model using the the principal components and fit a model. We use the cptable to find the best pruned tree with smallest error. But the constantly decreasing errors with more split suggests that the more splits the tree has, be better the model.  
+
+In theory, we need to further convert data in validation set into the first 55 principal components value and validate the model. However, for validation set, two categories of property tpye, which are "guest suite" and "dorm", are dropped automatically. This indicates that we cannot generate principal component values for the validation set. Therefore, we cannot conduct the PCA further.
+
+
+
+##Basic tree-rpart
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+listings_tree <-rpart(price~.,data=train.df,method="anova",cp=0.00001,minsplit=10,xval=5)
+
+printcp(listings_tree)
+
+rpart.valid<- as.data.frame(predict(listings_tree, valid.df))
+rpart.valid<- round(rpart.valid, 2)
+
+mse_rpart <- as.data.frame((rpart.valid - valid.df.result)^2)
+
+sqrt(sum(mse_rpart)/nrow(mse_rpart))
+
+sqrt(sum(mse_rpart)/nrow(mse_rpart))/nrow(valid.df)
+```
+
+We run a basic tree model with all the 35 variables after general variables selection process. Basic tree model gives the result of a mean squred error of 13232.03. This number is slightly smaller than the regression model, but the difference is not significant.
+ 
+
+# Pruning the model using Rpart
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+listings_rpart <- rpart(price ~., data = listings_final, method = "anova", cp = 0.000001)
+printcp(listings_rpart)
+plotcp(listings_rpart)
+```
+
+# Random Forest
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+library(randomForest)
+listings_rf <- randomForest(price ~., data = train.df, ntree = 500, mtry = 4, nodesize = 2, importance = TRUE)
+listings_rf
+
+varImp(listings_rf, type = 1)
+varImpPlot(listings_rf, col = rainbow(50))
+
+```
+Mean of squared residuals: 17822.45
+                    % Var explained: 37.57
+
+We ran Random Variable on Listings_Final data set to find the dependency of the variables on our target variable "Price". The output indicates a "Mean of Squared residuals" around 14000 and "%Var explained" = 43%. The former value indicates a mean error rate achieved when running the model on all variables. The 2nd value is the variance percentage, which is a measure of how well out-of-bag predictions explain the target variance of the training set. Unexplained variance (57%) is due to true random behavior or lack of the model. From the varimp function, we see 2 separate plots with "%incMSE" and "IncNodePurity". The MSE plot gives us a percentage of MSE increase with the addition of each important variable in our analysis. For example, the most important variable "Room Type" increases the MSE by 20%. Our goal is to achieve lowest MSE so dropping the variables will lower the MSE too, but as these variables are important, we can't drop them directly. On the other hand, the "IncNodePurity" relates to the loss function by which the best splits are chosen. The loss function is mse for regression. More useful variables achieve higher increases in node purities, that is to find a split which has a high inter-node 'variance' and a small intra-node 'variance'. The plot gives a list of variables which played the significant role during the node split of the resulting tree. Here, we can see that "Neighborhood_cleansed" is highest whereas the "Room Type" is lower.
+
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+new.train <- dummy.data.frame(train.df, names = c("neighbourhood_cleansed","property_type"))
+
+new.valid <- dummy.data.frame(valid.df, names = c("neighbourhood_cleansed","property_type"))
+
+names(new.train)
+names(new.valid)
+#PCA for training set
+prin_comp <-prcomp(new.train[-c(1,56)],center=TRUE,scale=TRUE)
+
+summary(prin_comp)
+
+train.data <-data.frame(price=new.train$price,prin_comp$x)
+
+
+train.data <- train.data[,1:55]
+
+rpart_model <- rpart(price~ ., data = train.data,method="anova",cp=0.00001)
+
+rpart_model
+
+printcp(rpart_model)
+
+```
+
+The MSE for basic tree is 13232.03, Random Forest is 17822.45, and Linear Regression is 13583.27.
+Based on the MSE obtained from running the 3 models Regression, Rpart, and Random Forest, Rpart gives the lowest MSE. However, one of the weakness of tree model is overfitting. In this specific case, we do have a dataset with many dimension. Therefore, we afraid overfitting is an issue. 
+
+If overfitting actually occured, tree model might no do as well as regression in predicting prices for new hosts. 
+
+Overall, the regression can be used for mutiple purposes. As a new host, that person will not be able to give all the information the tree model requires while the regression model can offer 5 different models for prediction. It is also a simpler model. 
+
+
+For Random Forest, the MSE is slightly higher than Rpart. When we see results on varImp plots, the order of important variables on MSE plot, is different from the order on the Node purity chart. This indicates that the important variables that predict the MSE, are not the ones for the best split. As the model is displaying the varied results, we cannot use it to analyze our requirement.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#Merging all predictions to one
+pred_two <- round(pred_two)
+
+model_nam <- seq ( 1 , 512 , by= 1 ) #naming models in all_lm_pred
+colnames (pred_two) <- model_nam
+
+#calculating the MSE
+listings.MSE_two <- data.frame ( lapply ( 1 : 512 , function (x){(
+  mean ((pred_two[x]-valid.df.result) ^ 2 ))}))
+
+colnames (listings.MSE_two) <- model_nam
+
+listings.MSE_two <- melt (listings.MSE_two)
+best_model_two <- listings.MSE_two
+
+colnames (best_model_two)[ 2 ] <- "MSE"
+best_model_two$model <- formulaSet_two
+
+#Selecting top 5 models on the basis of MSE
+best_model_two <- best_model_two %>%
+arrange (model, desc (MSE)) %>%
+filter (MSE < 13736.55)
+best_model_two$MSE <- round (best_model_two$MSE, 4 )
+
+lm_best_two <- lapply ( 1 : 5 ,
+function (x){ lm ( as.formula (best_model_two $ model[x]),
+data= train.df)})
+
+best_model_two$adj.r.squared <- round ( as.numeric ( lapply ( 1 : 5 ,( function (x)
+  {  summary (lm_best_two[[x]]) $ adj.r.squared}))), 4 )
+
+best_model_two$err_per_obs <- round(sqrt(best_model_two$MSE)/nrow(valid.df), 2)
+
+best_model$model
+
+
+
+
+```
+
+This is the best model                               
+price~ host_listings_count+room_type+bathrooms+bedrooms+host_identity_verified+review_scores_cleanliness+reviews_per_month            
+
+From this model, we can see the important factors that affect listing price. Room type makes a great impact on the price as entire apartment will be more expensive than private room or shared room while holding everything else constant. Listings with more bathroom and bedrooms will also charge a higher price. The hosts that have not been verified are less trustworthy so they cannot charge a higher price for their listing. The guests prefer properties with higer cleanliness score and more reviews per month, so the host charges higher price for their property.
+
+#Conclusion
+This model can be applied by current hosts as recommendation to maximize their chance of getting renters as well as their profit. For new host joining the site, the model can suggest starting price for the host and later on suggest a better price when the host get more reviews and scores for cleanliness. 
+
+
+
+

@@ -1,0 +1,349 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r message=FALSE, warning=FALSE, include=FALSE, paged.print=FALSE}
+library(readr)
+library(GGally)
+library(ggplot2)
+#install.packages(cluster)1
+library(cluster)
+#install.packages("fpc")
+library(fpc)
+#install.packages("factoextra")
+library(factoextra)
+#install.packages("heatmaply")
+library(heatmaply)
+```
+
+# Data Preparation
+We attempt to replace missing data with average value 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# Read CSV
+whr.df <- read.csv(file.choose(), header = T)
+
+# Read CSV to refer for the row names
+whr.df.names <- read.csv(file.choose(), header = T)
+
+head(whr.df)
+str(whr.df)
+whr.df <- whr.df[,-1]
+
+# Replacing missing data with average
+whr.df$LifeExp<- ifelse(is.na(whr.df$LifeExp), mean(whr.df$LifeExp, na.rm=TRUE), whr.df$LifeExp)
+whr.df$LifeChoice<- ifelse(is.na(whr.df$LifeChoice), mean(whr.df$LifeChoice, na.rm=TRUE), whr.df$LifeChoice)
+whr.df$Generosity<- ifelse(is.na(whr.df$Generosity), mean(whr.df$Generosity, na.rm=TRUE), whr.df$Generosity)
+whr.df$Corruption<- ifelse(is.na(whr.df$Corruption), mean(whr.df$Corruption, na.rm=TRUE), whr.df$Corruption)
+whr.df$GDPpc<- ifelse(is.na(whr.df$GDPpc), mean(whr.df$GDPpc, na.rm=TRUE), whr.df$GDPpc)
+whr.df$LnGDPpc<- ifelse(is.na(whr.df$LnGDPpc), log(whr.df$GDPpc), whr.df$LnGDPpc)
+
+
+# Plot to see the relationships between input variables
+ggcorr(whr.df[, c(1:8)], label=TRUE, cex=3)
+ggpairs(whr.df, columns= c(1:8), upper = list(continuous = wrap("cor", size = 3)))
+
+```
+
+#Data Transformation
+From the plots, we can see that GDP per capita is strongly positively skewed while social support, life choice and corruption are highly negatively skewed. Therefore, to make the data more normalized distributed, we use Logarithmic transformation for GDP per captia and power transformation for social support, life choice and corruption. 
+
+
+Next we will perform data normalization. The original data is very skewed, which would affect the result's accuracy. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+whr.df$SocSupp_sq<-whr.df$SocSupp^2
+hist(whr.df$SocSupp_sq)
+whr.df$SocSupp_3<-whr.df$SocSupp^3
+hist(whr.df$SocSupp_3)
+
+whr.df$LifeChoice_sq<-whr.df$LifeChoice^2
+hist(whr.df$LifeChoice_sq)
+
+whr.df$Corruption_sq<-whr.df$Corruption^2
+hist(whr.df$Corruption_sq)
+whr.df$Corruption_3<-whr.df$Corruption^3
+hist(whr.df$Corruption_3)
+
+
+ggpairs(whr.df, columns= c(1,2,4,6,10,11,13), upper = list(continuous = wrap("cor", size = 3)))
+
+```
+
+As a result, the data looks more normally distributed.
+
+# Variable Selection
+From the correlation between variables, we can oberseve that except the 0.783 correlation between life expectancy and Ln GDP per capita, there is no significantly collinearity among the other factors if Life Ladder is excluded. Therefore, we would omit Life Ladder and include the remaining 6 factors in our model: Ln GDP per captia, life expectancy, generosity, social support cube, life choice squre and corruption cube. 
+
+# Normalize input varables
+We strive to standardize the the data. Hence, we will perform data normalization. The original data is very skewed, which would affect the result's accuracy. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+whr.df.new<-whr.df[,c(1,2,4,6,10,11,13)]
+# Normalize input variables
+whr.df.norm <- sapply(whr.df.new, scale)
+whr.df.norm
+
+# Add row names:
+#row.names(whr.df.norm) <- row.names(whr.df)
+row.names(whr.df.norm) <- whr.df.names[,1]
+```
+
+# Exclude "LifeLadder" Column
+We first exclude variable LifeLadder when performing clustering. 
+
+
+# K-means clustering model
+We try to find the best number of cluster.
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+set.seed(123)
+
+# Initialize total within sum of squares error: wss
+wss <- 0
+
+# For 1 to 15 cluster centers
+for (i in 1:15) {
+  km.out <- kmeans(whr.df.norm[,-1], centers = i, nstart=20)
+
+# Save total within sum of squares to wss variable
+  wss[i] <- km.out$tot.withinss
+}
+
+# Plot total within sum of squares vs. number of clusters
+plot(1:15, wss, type = "b", 
+     xlab = "Number of Clusters", 
+     ylab = "Within groups sum of squares")
+```
+
+From the plot, we can figure out that the best optimal number of clusters is 3. It is consistent with our judgments as we believe "happiness" depends alot on wealth. An indicator of wealth would be GDPpc, which can be separated into three categories: high, medium and low. Therefore, having three cluster make intuitive sense to our group. 
+
+Next, we set k to 3 and start running the model. 
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# Set k equal to the number of clusters corresponding to the elbow location
+k <- 3
+
+# Build model with k=3 clusters
+km.out <- kmeans(whr.df.norm[,-1], centers = k, nstart = 25, iter.max = 50)
+km.out$cluster
+
+# plot the clusters
+plot(whr.df.norm, col = km.out$cluster, main = "k-means with 3 clusters", xlab = "", ylab = "")
+
+#centroid plot
+plot(c(0), xaxt = 'n', ylab = "", type = "l", ylim = c(min(km.out$centers), max(km.out$centers)), xlim = c(0,6))
+
+# Label x-axes
+axis(1, at = c(1:6), labels = names(whr.df.new[,-1]), cex.axis = 0.7)
+
+# Plot Centroids
+for (i in c(1:k))
+lines(km.out$centers[i,], lty = i, lwd = 2, col = ifelse(i %in% c(2), "black", "dark gray"))  
+
+
+# Name the clusters
+text(x = 0.5, y = km.out$centers[,1], labels = paste("Cluster", c(1:k)))
+
+#Plot the clusters
+clusplot(whr.df.norm, km.out$cluster, main = "Cluster Plot with K-means excluding LifeLadder", color = TRUE, shade = TRUE, labels = 2, lines = 0, cex = 0.7)
+
+```
+
+From the graph, we can see the characteristics of the three clusters. Cluster 1 has high GDP per capita and high score for life expectancy, generosity, social support with very low corruption. Cluster 2, on the other hand, has very low GDP per capita, low life expectancy, social support and life choice but significantly high corruption and surprisingly high generosity. On the other hand, Cluster 3 has medium GDP per capita, social support and life choice but highest corruption and lowest generosity among the three clusters. 
+
+So, a handful of countries from each of the clusters is as below
+
+cluster 1: 
+Luxembourg, Finland, Switzerland, New Zealand and Denmark
+
+Cluster 2:
+Rwanda, Kenya, Malawi, Haiti, and Ivory Coast
+
+Cluster 3: 
+Greece, Hungary, China, Russia and Mexico
+
+
+
+#Heirarchical clustering model
+introduction ( how to measure the distance between clusters)
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#compare different measurement of distance
+
+#plot(hc.out.complete)
+hc.out.complete<- hclust(dist(whr.df.norm), method = "complete")
+plot(hc.out.complete)
+
+#plot(hc.out.single)
+hc.out.single<- hclust(dist(whr.df.norm), method = "single")
+plot(hc.out.single)
+
+#plot(hc.out.average)
+hc.out.average<- hclust(dist(whr.df.norm), method = "average")
+plot(hc.out.average)
+
+#plot(hc.out.centroid)
+hc.out.centroid<- hclust(dist(whr.df.norm), method = "centroid")
+plot(hc.out.complete)
+
+#"complete" gives the most balanced clustering
+
+```
+
+By using different types of measurement of distance, we get different results and we choose the most balance one which is the "complete" method. 
+
+Now, with k = 3, we will start building our hierarchical model
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+#cut the dendogram into k=3 clusters
+cut.whr<-cutree(hc.out.complete,k= 3)
+
+# plot heatmap
+heatmap(whr.df.norm[,-1], Colv = NA, hclustfun = hclust, 
+        col=rev(paste("gray",1:99,sep="")), cexRow = 0.2, cexCol = 0.9)
+
+# Plot the clusters
+clusplot(whr.df.norm, cut.whr, main = "Cluster Plot for Hierarchical model without LifeLadder", color = TRUE, shade = TRUE, labels = 2, lines = 0, cex = 0.7)
+
+```
+
+From the heatmap we can see that the first cluster has the characteristic of high GDP per capita, long life expectancy, large social support, more freedom of life choices, while people are less generous and the government corruption is not widespread. The second cluster includes countries that have similar conditions in terms of GDP per capita, life expectancy, less social suppor to that in the first cluster, very little freedom of life choices, and the corruption is very severe. Countries in the third cluster generally have less GDP per captia, shorter life expectancy, little social support, and widepread corruption. But their people are very generous and have more freedom of life choices than that in the second cluster.
+
+
+# Comparing cluster results from k-means and heirarchical
+From the plots, we see significant difference between two models
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# comparing cluster results
+table(km.out$cluster)
+table(cut.whr)
+```
+
+As we can see, the heirachical model provides some conflicting results. For cluster 1 of the heirachical model, we see Finland, Belgium, Switzerland with Rwanda and Kenya in the same cluster. This may result from the nature of heirachichal model which is its sensitivity with outliers.   
+Therefore, for this case, we choose k-means as our best model.
+
+
+#Include "LifeLadder" Column
+Now we will look at the models when including variable lifeladder.
+
+
+#Heirarchical Model
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# As seen above in the Hierarchical model, the best measure of distance is by using the "Complete" method. Therefore, we use the same method
+hc.out.complete.1<- hclust(dist(whr.df.norm), method = "complete")
+plot(hc.out.complete)
+
+# Cut the dendogram into k=3 clusters
+cut.whr.1<-cutree(hc.out.complete.1,k= 3)
+
+# Plot heatmap
+heatmap(whr.df.norm, Colv = NA, hclustfun = hclust, 
+        col=rev(paste("gray",1:99,sep="")), cexRow = 0.2, cexCol = 0.9)
+
+
+# Plot the clusters
+clusplot(whr.df.norm, cut.whr.1, main = "Cluster Plot for Hierachical Model including LifeLadder", color = TRUE, shade = TRUE, labels = 2, lines = 0, cex = 0.7)
+
+
+```
+
+From the heatmap, we can see the characteristics of the clusters. The cluster with lowest Lifeladder has low GDP per capita with very high generostity and corruption. The cluster with medium liferladder show many conflicting characteristics within the cluster itself. For example, despite countries in this cluster share similar GDP per capita, their generosity and lifechoice varies. The cluster with highest lifeladder has very high GDP per capity as well as high score for other factor and very little corruption.
+
+Countries for clusters
+Cluster 1: Haiti, Ghana, Ivory Coast, Mali, Central African Republic
+
+Cluster 2: Greece, Russia, China, Spain, Italy
+
+Cluster 3: Luxembourg, Finland, Switzerland, New Zealand, Kenya
+
+
+
+# K-means Model
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+
+# Build model with k=3 clusters
+km.out.1 <- kmeans(whr.df.norm, centers = k, nstart = 25, iter.max = 50)
+km.out$cluster
+
+# clusters
+plot(whr.df.norm, col = km.out$cluster, main = "k-means with 3 clusters", xlab = "", ylab = "")
+
+#centroid plot
+# Scatter Plot
+plot(c(0), xaxt = 'n', ylab = "", type = "l", ylim = c(min(km.out.1$centers), max(km.out.1$centers)), xlim = c(0,7))
+
+# Label x-axes
+axis(1, at = c(1:7), labels = names(whr.df.new), cex.axis = 0.7)
+
+# Plot Centroids
+for (i in c(1:k))
+lines(km.out.1$centers[i,], lty = i, lwd = 2, col = ifelse(i %in% c(2), "black", "dark gray"))  
+
+
+# Name the clusters
+text(x = 0.5, y = km.out.1$centers[,1], labels = paste("Cluster", c(1:k)))
+
+# Plot the clusters 
+clusplot(whr.df.norm, km.out.1$cluster, main = "Cluster Plot for K-means including LifeLadder", color = TRUE, shade = TRUE, labels = 2, lines = 0, cex = 0.7)
+
+```
+
+From the graph, we can see the characteristics of the three clusters. Cluster 2 with highest Lifeladder score has high GDP per capita and high score for life expectancy, generosity, social support with very low corruption. Cluster 1, with lowest Lifeladder score, on the other hand, has very low GDP per capita, low life expectancy, social support and life choice but significantly high corruption and surprisingly high generosity. Cluster 3, with medium lifeladder score, has medium GDP per capita, social support and life choice but highest corruption and lowest generosity among the three clusters. 
+
+Countries for clusters
+Cluster 1: Rwanda, Kenya, Malawi, Haiti, Ivory Coast
+
+Cluster 2: Luxembourg, Finland, New Zealand, Austria, Switzerland
+
+Cluster 3: Greece, Hungary, Russia, Italy, Spain
+
+```{r echo=TRUE, message=FALSE, warning=FALSE, paged.print=FALSE}
+# comparing cluster results on K-means
+table(km.out.1$cluster)
+
+# Comparison on Hierarchical Model
+table(cut.whr.1)
+
+```
+
+As we can see, the heirachical model provides some conflicting results. For cluster 3 of the heirachical model, we see Finland, Belgium, Switzerland with Rwanda and Kenya in the same cluster. This may result from the nature of heirachichal model which is its sensitivity with outliers.   
+Therefore, for this case, we choose k-means as our best model.
+
+K-Means Advantages :
+1) If variables are huge, then  K-Means most of the times is computationally faster than hierarchical clustering, if we keep k smalls.
+2) K-Means produce tighter clusters than hierarchical clustering
+3) Easy to implement
+
+Disadvantages:
+1) Strong sensitivity to outliers and noise
+2) Doesn't work well with non-circular cluster shape -- number of cluster and initial seed value need to be specified beforehand
+3) The order of the data has an impact on the final results
+4) Selection of optimal number of clusters is difficult	
+5) Not recommended if dataset has more categorical variables
+6) Assumes that clusters are spherical, distinct, and approximately equal in size
+
+
+Heirarchical Model:
+Advantages
+1)  It is easier to decide on the number of clusters by looking at the dendrogram
+2) NO prior imformation about number of clusters required
+3) Dendograms are great for visualization
+4) Only a distance of proximity matrix is required to compute the heirarchical clustering
+
+Disadvantages
+1) Time	complexity: not suitable for large datasets
+2) Initial seeds have a strong impact on the final results	
+3) The order of	the data has an	impact	on the final results
+4) Very	sensitive to outliers
+
+

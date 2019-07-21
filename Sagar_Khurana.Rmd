@@ -1,0 +1,141 @@
+---
+title: "Order Data"
+Email ID: er.sagar1988@gmail.com
+Author: Sagar Khurana
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r echo=TRUE}
+
+library(rpart)
+library(dplyr)
+library(sqldf)
+library(ggplot2)
+library(caret)
+
+```
+
+# Install and run the necessary libraries above
+
+```{r echo=TRUE}
+
+# Import the dataset
+data <- read.csv(file.choose())
+str(data)
+summary(data)
+mean(data$value)
+
+```
+
+# After importing the data set and assigning it to a dataframe, I viewed the structure of the dataset to understand the data types of variables and the summary to catch a glimpse of statistical data i.e. mean, median, minimum, maximum values for each variable. I also checked for the mean of the dollar value that each customer has spent.
+
+```{r eval=FALSE, include=FALSE}
+```
+
+#### A. Assemble the dataset as one row per customer
+
+```{r echo=TRUE}
+
+# Extract the data with count on the dollar values per customer id
+data_new <- sqldf("select customer_id, gender, date, count(distinct(value)) as value_count from data group by customer_id")
+data_new
+
+# Split the date-time format
+data_new$date <- as.Date(data_new$date)
+data_new
+
+# compute the most recent date from all transaction dates per customer
+data_assembled<- sqldf("select * from data_new") %>%
+  group_by(customer_id, gender, value_count) %>%
+  summarise(most_recent_date = format(max(date)))
+data_assembled
+
+# Sort the data set
+data_assembled_sorted <- sqldf("Select * from data_assembled order by customer_id asc")
+data_assembled_sorted
+
+# Disply the top 10 records
+head(data_assembled_sorted, 10)
+
+```
+
+# In this part, I first ran an SQL statement to extract the 4 required variables as per the requirement including the count of transactions by each customers. Following, I split the date values from date-time format to just date in order to find the most recent date of order. Next, I sorted the data frame on customer ID and finally displayed the first 10 records.
+
+```{r eval=FALSE, include=FALSE}
+```
+
+#### B. Plot the count of orders per week
+
+```{r echo=TRUE}
+
+data_assembled$week_no <- strftime(data_assembled$most_recent_date, format = "%V")
+data_assembled
+
+ggplot(data_assembled, aes(x = week_no, y = value_count)) +
+  geom_point(aes(color = factor(value_count)), size = 2, alpha = 0.8) +
+  scale_y_continuous(limits = c(1, 20), breaks = c(3,6,9,12,15,18,20)) +
+  theme(axis.text.x = element_text(angle = 90)) +
+  labs(x = "Week Number",
+       y = "Number of Orders",
+       title = "Number of orders per week")
+
+```
+
+# Here, I first computed the week number in which each date falls. Then, I used the GGPLOT functionto plot the week number against the number of orders in each week.
+
+```{r eval=FALSE, include=FALSE}
+```
+
+#### C. Compute the mean order for gender types
+
+```{r echo=TRUE}
+
+# Compute the mean of values for gender 0
+data_1 <- data %>%
+  filter(gender == 0)
+mean_0 <- mean(data_1$value)
+mean_0
+
+# Compute the mean of values for gender 1
+data_2 <- data %>%
+  filter(gender == 1)
+mean_1 <- mean(data_2$value)
+mean_1
+
+# Conduct t-test to check for the significance of the two means
+test <- t.test(data_1$value, data_2$value, "g", 0, FALSE, TRUE, 0.95)
+test
+
+```
+
+# After splitting the data records on gender values 0 and 1, I computed the means of the dollar values in each case and then conducted a t-test to check for the significance of each mean value.
+
+
+# There is a significant difference between the two means. The t-test result indicates a very low p-value of 0.0241, which is much less than the usual significant value of 0.05. Therefore, the null hypothesis would be rejected of no difference as there's enough evidence to support the significant difference between the means.
+
+```{r eval=FALSE, include=FALSE}
+```
+
+#### D. Confusion Matrix for predicted gender
+
+```{r echo=TRUE}
+
+set.seed(1)
+
+# Build a decision tree classification model on data
+tree <- rpart(predicted_gender~., data = data, method = "class")
+
+# Make the predictions
+pred <- predict(tree, data, type = "class")
+
+# Make the confusion matrix
+table(data$predicted_gender, pred)
+
+```
+
+# Here, I built a decision tree classifier to analyze the predicted gender values against the order daya and then created the predictions based on the tree data. The predicted gender records were then analyzed against predicted data in a confusion matrix.
+
+# The confusion matrix results indicate 8655 records of True Positive compared to 4812 records of True Negative out of 13,471 records. Of these records, the classifier predicted "yes" 8655 times and "no" 4816 times. A total of 8659 cusotmers' gender was predicted and 4812 customers' not. 8655 customers' gender was predicted to be true, and it is proved likewise. The classifier did not predict genders for 4812 customers which is confirmed my the test. There was no falsely positive predicted gender customers. However, there are 4 customers whose gender was predicted falsely. Around 65% of predictions hold true so I wouldn't say that it's the best but it seems to be a good quality prediction.

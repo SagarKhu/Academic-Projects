@@ -1,0 +1,76 @@
+---
+title: "Red_Wine"
+author: "Sagar Khurana"
+date: "March 4, 2018"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+
+library(readr)
+library(tidyverse)
+library(ggplot2)
+library(tidyr)
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(adabag)
+library(ipred)
+
+# Read csv
+red <- read.csv(file.choose(), header = T)
+red
+
+#Modifying the variables
+red$quality <- as.factor(red$quality)
+red$rating <- ifelse(red$quality == 7 & red$quality == 8, "Excellent", ifelse(red$quality == 5 & red$quality == 6, "Normal", "Poor"))
+red$rating <- as.factor(red$rating)
+
+# Update the names of variables
+colnames(red)[1] <- c("fixed_acidity") 
+colnames(red)[2] <- c("volatile_acidity") 
+colnames(red)[3] <- c("citric_acid") 
+colnames(red)[4] <- c("residual_sugar") 
+colnames(red)[6] <- c("free_sulfur_dioxide") 
+colnames(red)[7] <- c("total_sulfur_dioxide")
+
+
+# Training & Validation
+set.seed(123)
+train.index <- sample(c(1:dim(red)[1]), dim(red)[1] * 0.8)
+train.df <- red[train.index, ]
+valid.df <- red[-train.index, ]
+
+
+
+# Random Forest
+red.rf <- randomForest(quality ~ ., data = train.df, ntree = 500, mtry = 4, nodesize = 8, importance = TRUE)
+red.rf
+
+```
+
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+
+varImpPlot(red.rf, type = 1, col = rainbow(18))
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
